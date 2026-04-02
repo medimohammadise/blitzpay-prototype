@@ -44,6 +44,8 @@ CI note for iOS: the `preview` profile is configured with `ios.simulator: true` 
 
 If you need an installable iOS device build (internal distribution or production), run EAS credentials setup once in interactive mode (for example `cd mobile && npx eas credentials`) and then use a non-simulator profile.
 
+Release notes in CI: the workflow input `release-notes-tag` defaults to `latest`. During `eas-update`, CI reads that GitHub release and uses it as the EAS update message. Set a specific tag (for example `v1.2.0`) to target a particular release.
+
 ## Environment variables
 
 ### Web (Vite)

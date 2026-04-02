@@ -42,6 +42,11 @@ on:
         required: false
         default: false
         type: boolean
+      release-notes-tag:
+        description: GitHub release tag to use for EAS update message ("latest" uses the latest release)
+        required: false
+        default: latest
+        type: string
       submit-to-app-stores:
         description: Submit builds to Google Play and App Store Connect
         required: false
@@ -78,6 +83,10 @@ on:
         required: false
         default: false
         type: boolean
+      release-notes-tag:
+        required: false
+        default: latest
+        type: string
       submit-to-app-stores:
         required: false
         default: false
@@ -200,12 +209,65 @@ jobs:
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
 
+      - name: Skip duplicate active build
+        id: duplicate-build-check
+        env:
+          REQUESTED_PLATFORM: ${{ inputs.eas-platform || github.event.inputs.eas-platform || 'all' }}
+          REQUESTED_PROFILE: ${{ inputs.eas-profile || github.event.inputs.eas-profile || 'preview' }}
+        run: |
+          app_version="$(npx expo config --json | jq -r '.expo.version // empty')"
+          if [ -z "$app_version" ]; then
+            echo "Could not read expo.version from app config."
+            exit 1
+          fi
+          echo "Checking active builds for version=$app_version, profile=$REQUESTED_PROFILE, platform=$REQUESTED_PLATFORM"
+
+          has_active_build() {
+            local platform="$1"
+            local status="$2"
+            eas build:list \
+              --json \
+              --non-interactive \
+              --limit 1 \
+              --platform "$platform" \
+              --build-profile "$REQUESTED_PROFILE" \
+              --app-version "$app_version" \
+              --status "$status" | jq -e 'length > 0' >/dev/null
+          }
+
+          duplicate_found=false
+          if [ "$REQUESTED_PLATFORM" = "all" ]; then
+            for platform in android ios; do
+              if has_active_build "$platform" in-progress || has_active_build "$platform" in-queue; then
+                duplicate_found=true
+                break
+              fi
+            done
+          else
+            if has_active_build "$REQUESTED_PLATFORM" in-progress || has_active_build "$REQUESTED_PLATFORM" in-queue; then
+              duplicate_found=true
+            fi
+          fi
+
+          if [ "$duplicate_found" = true ]; then
+            echo "skip_build=true" >> "$GITHUB_OUTPUT"
+            echo "Active EAS build already exists for this version/profile/platform. Skipping."
+          else
+            echo "skip_build=false" >> "$GITHUB_OUTPUT"
+            echo "No active duplicate build found. Continuing."
+          fi
+
       - name: Build with EAS
+        if: ${{ steps.duplicate-build-check.outputs.skip_build != 'true' }}
         run: |
           eas build \
             --non-interactive \
             --profile "${{ inputs.eas-profile || github.event.inputs.eas-profile || 'preview' }}" \
             --platform "${{ inputs.eas-platform || github.event.inputs.eas-platform || 'all' }}"
+
+      - name: Duplicate build detected
+        if: ${{ steps.duplicate-build-check.outputs.skip_build == 'true' }}
+        run: echo "Skipped EAS build because an active build with the same version/profile/platform is already running."
 
   eas-update:
     name: Publish EAS Update
@@ -233,6 +295,61 @@ jobs:
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
 
+       - name: Resolve release notes message
+        id: release-notes
+        uses: actions/github-script@v7
+        env:
+          RELEASE_NOTES_TAG: ${{ inputs.release-notes-tag || github.event.inputs.release-notes-tag || 'latest' }}
+        with:
+          script: |
+            const requestedTag = (process.env.RELEASE_NOTES_TAG || "latest").trim();
+            const fallbackMessage = `CI update from ${context.workflow}`;
+
+            const normalize = (value) =>
+              String(value || "")
+                .replace(/\r\n/g, "\n")
+                .trim();
+
+            try {
+              let release;
+              if (requestedTag.toLowerCase() === "latest") {
+                ({ data: release } = await github.rest.repos.getLatestRelease({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                }));
+              } else {
+                ({ data: release } = await github.rest.repos.getReleaseByTag({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  tag: requestedTag,
+                }));
+              }
+
+              const releaseTitle = normalize(release.name) || normalize(release.tag_name);
+              const releaseBody = normalize(release.body);
+              const firstBodyLine =
+                releaseBody
+                  .split("\n")
+                  .map((line) => line.trim())
+                  .find((line) => line.length > 0 && !line.startsWith("#")) || "";
+
+              let updateMessage = releaseTitle || fallbackMessage;
+              if (firstBodyLine) {
+                updateMessage = `${updateMessage}: ${firstBodyLine}`;
+              }
+              if (updateMessage.length > 240) {
+                updateMessage = `${updateMessage.slice(0, 237)}...`;
+              }
+
+              core.setOutput("update_message", updateMessage);
+              core.info(`Using release notes from tag "${release.tag_name}".`);
+            } catch (error) {
+              core.warning(
+                `Unable to resolve release notes for tag "${requestedTag}". Using fallback message. ${error.message}`
+              );
+              core.setOutput("update_message", fallbackMessage);
+            }
+
       - name: Publish EAS Update
         run: |
           update_branch="${{ github.ref_name }}"
@@ -242,7 +359,7 @@ jobs:
           eas update \
             --non-interactive \
             --branch "$update_branch" \
-            --message "CI update from ${{ github.workflow }}" \
+            --message "${{ steps.release-notes.outputs.update_message }}" \
             --platform all
 
   store-submit:
