@@ -80,9 +80,9 @@ function parseJsonFromOutput(stdout) {
   throw new Error(`Unable to parse JSON from EAS output:\n${trimmed}`);
 }
 
-function runEasJson(args) {
+function runCommand(command, args) {
   return new Promise((resolve, reject) => {
-    const child = spawn('npx', ['eas', ...args, '--json', '--non-interactive'], {
+    const child = spawn(command, args, {
       env: process.env,
       cwd: process.cwd(),
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -100,26 +100,61 @@ function runEasJson(args) {
     });
 
     child.on('error', (error) => {
-      reject(error);
+      const message = `Failed to start command: ${command} ${args.join(' ')}\n${error.message}`;
+      reject(Object.assign(new Error(message), { kind: 'spawn', command, args, stdout, stderr }));
     });
 
     child.on('close', (code) => {
       if (code !== 0) {
+        const message = `Command failed: ${command} ${args.join(' ')}\n${stderr.trim() || stdout.trim()}`;
         reject(
-          new Error(
-            `Command failed: npx eas ${args.join(' ')}\n${stderr.trim() || stdout.trim()}`
-          )
+          Object.assign(new Error(message), {
+            kind: 'exit',
+            code,
+            command,
+            args,
+            stdout,
+            stderr,
+          })
         );
         return;
       }
 
-      try {
-        resolve(parseJsonFromOutput(stdout));
-      } catch (error) {
-        reject(error);
-      }
+      resolve({ stdout, stderr });
     });
   });
+}
+
+function isCliInvocationError(error) {
+  const output = `${error?.message || ''}\n${error?.stderr || ''}\n${error?.stdout || ''}`;
+  return (
+    error?.kind === 'spawn' ||
+    /could not determine executable to run|command not found|not found|ENOENT/i.test(output)
+  );
+}
+
+async function runEasJson(args) {
+  const commandSpecs = [
+    { command: 'eas', prefix: [] },
+    { command: 'npx', prefix: ['eas'] },
+  ];
+
+  let lastError = null;
+  for (const spec of commandSpecs) {
+    const fullArgs = [...spec.prefix, ...args, '--json', '--non-interactive'];
+    try {
+      const { stdout } = await runCommand(spec.command, fullArgs);
+      return parseJsonFromOutput(stdout);
+    } catch (error) {
+      lastError = error;
+      if (isCliInvocationError(error)) {
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  throw lastError || new Error('Unable to execute EAS CLI.');
 }
 
 function pickBuildObject(payload) {
