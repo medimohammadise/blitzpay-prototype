@@ -7,7 +7,10 @@
     "web": "expo start --web",
     "android": "expo start --android",
     "ios": "expo start --ios",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "typecheck": "tsc --noEmit --pretty false",
+    "test": "node ./scripts/run-tests.js",
+    "test:device": "node ./scripts/device-tests.js"
   },
   "dependencies": {
     "@expo/vector-icons": "^14.0.4",
