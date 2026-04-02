@@ -56,4 +56,6 @@ jobs:
 
       - name: Expo Doctor
         working-directory: ${{ env.APP_DIR }}
+        env:
+          EXPO_DOCTOR_WARN_ON_NETWORK_ERRORS: "1"
         run: npx expo-doctor
