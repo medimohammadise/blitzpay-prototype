@@ -69,6 +69,8 @@ The GitHub Actions workflow (`.github/workflows/mobile-react-native-build.yml`) 
 
 Release notes in CI: the workflow input `release-notes-tag` defaults to `latest`. During `eas-update`, CI reads that GitHub release and uses it as the EAS update message. Set a specific tag (for example `v1.2.0`) to target a particular release.
 
+CI app versioning: during `eas-build`, the same `release-notes-tag` input (default `latest`) is resolved to a GitHub release tag and mapped to Expo app version (`v1.2.3` -> `1.2.3`). CI writes that value into `mobile/app.json` before EAS build so EAS does not stay on the static `1.0.0`.
+
 ### Sync `mobile/.env` to GitHub Actions vars/secrets
 
 Use `.github/scripts/sync-mobile-env-to-github.sh` to push mobile env keys to your repository settings:

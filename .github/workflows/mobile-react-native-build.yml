@@ -158,6 +158,7 @@ jobs:
       NODE_VERSION: ${{ needs.resolve-config.outputs.node_version }}
       REQUESTED_PROFILE: ${{ needs.resolve-config.outputs.eas_profile }}
       REQUESTED_PLATFORM: ${{ needs.resolve-config.outputs.eas_platform }}
+      RELEASE_NOTES_TAG: ${{ needs.resolve-config.outputs.release_notes_tag }}
       EXPO_PUBLIC_KEYCLOAK_URL: ${{ vars.EXPO_PUBLIC_KEYCLOAK_URL }}
       EXPO_PUBLIC_KEYCLOAK_REALM: ${{ vars.EXPO_PUBLIC_KEYCLOAK_REALM }}
       EXPO_PUBLIC_KEYCLOAK_CLIENT_ID: ${{ vars.EXPO_PUBLIC_KEYCLOAK_CLIENT_ID }}
@@ -196,6 +197,57 @@ jobs:
         with:
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Resolve app release version
+        id: release-version
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const requestedTag = (process.env.RELEASE_NOTES_TAG || "latest").trim();
+            const semverPattern = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+
+            let release;
+            if (requestedTag.toLowerCase() === "latest") {
+              ({ data: release } = await github.rest.repos.getLatestRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+              }));
+            } else {
+              ({ data: release } = await github.rest.repos.getReleaseByTag({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag: requestedTag,
+              }));
+            }
+
+            const releaseTag = String(release.tag_name || requestedTag).trim();
+            const appVersion = releaseTag.replace(/^v/i, "");
+
+            if (!semverPattern.test(appVersion)) {
+              core.setFailed(
+                `Release tag "${releaseTag}" is not SemVer. Use tags like v1.2.3 (or 1.2.3).`
+              );
+              return;
+            }
+
+            core.info(`Resolved app version ${appVersion} from release tag "${releaseTag}".`);
+            core.setOutput("release_tag", releaseTag);
+            core.setOutput("app_version", appVersion);
+
+      - name: Apply release version to Expo app config
+        working-directory: ${{ env.APP_DIR }}
+        run: |
+          app_version="${{ steps.release-version.outputs.app_version }}"
+          release_tag="${{ steps.release-version.outputs.release_tag }}"
+          if [ -z "$app_version" ]; then
+            echo "Resolved app version is empty."
+            exit 1
+          fi
+
+          tmp_file="$(mktemp)"
+          jq --arg version "$app_version" '.expo.version = $version' app.json > "$tmp_file"
+          mv "$tmp_file" app.json
+          echo "Using Expo app version $app_version from GitHub release $release_tag"
 
       - name: Create runtime .env for Expo/EAS
         working-directory: ${{ env.APP_DIR }}
