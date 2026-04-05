@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useRef, useState, type Rea
 import { Platform } from 'react-native';
 import { storage } from './storage';
 import { config } from './config';
+import { observability } from './observability';
 
 // expo-local-authentication is native-only — not available on web
 const LocalAuthentication = Platform.OS !== 'web'
@@ -230,7 +231,11 @@ export function AuthProvider({ children, onSessionExpired }: AuthProviderProps) 
 
     if (!res.ok) {
       const body = await res.json().catch(() => ({})) as { error?: string; error_description?: string };
-      console.error('[auth] login failed', res.status, body.error, body.error_description);
+      observability.warn('auth_login_failed', {
+        status: res.status,
+        error: body.error ?? 'unknown',
+        reason: body.error_description ?? 'n/a',
+      });
       if (body.error === 'invalid_grant') throw new Error('wrong_credentials');
       if (body.error === 'unauthorized_client') throw new Error('account_locked');
       if (res.status === 401) throw new Error('wrong_credentials');
